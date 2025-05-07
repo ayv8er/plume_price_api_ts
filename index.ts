@@ -1,13 +1,30 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import { ethers, formatUnits } from 'ethers';
+import { createPublicClient, http, formatUnits, defineChain } from 'viem';
+import { mainnet } from 'viem/chains';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 8000;
 
-const w3Plume = new ethers.JsonRpcProvider('https://rpc.plume.org');
+export const plume = defineChain({
+  id: 98866,
+  name: 'Plume Mainnet',
+  nativeCurrency: { name: 'PLUME', symbol: 'PLUME', decimals: 18 },
+  rpcUrls: {
+    default: { http: ['https://rpc.plume.org'] },
+  },
+  blockExplorers: {
+    default: { name: 'Plume Explorer', url: 'https://explorer.plume.org' },
+  },
+});
+
+const plumeClient = createPublicClient({
+  chain: plume,
+  transport: http(),
+});
+
 const POOL_LENS_ADDRESS = '0xBf0D89E67351f68a0a921943332c5bE0f7a0FF8A';
 const PLUME_PUSD_POOL = '0x4A14398C5c5B4B7913954cB82521fB7afA676314';
 
@@ -19,21 +36,24 @@ const POOL_LENS_ABI = [
     stateMutability: 'view',
     type: 'function',
   },
-];
+] as const;
 
 const alchemyRpc = process.env.ALCHEMY_RPC;
-const w3Mainnet = new ethers.JsonRpcProvider(alchemyRpc);
+const mainnetClient = createPublicClient({
+  chain: mainnet,
+  transport: http(alchemyRpc || undefined),
+});
 const CHAINLINK_ETH_USD = '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419';
 
 const CHAINLINK_ABI = [
   {
     name: 'latestRoundData',
     outputs: [
-      { type: 'uint80' },
-      { type: 'int256' },
-      { type: 'uint256' },
-      { type: 'uint256' },
-      { type: 'uint80' },
+      { type: 'uint80', name: 'roundId' },
+      { type: 'int256', name: 'answer' },
+      { type: 'uint256', name: 'startedAt' },
+      { type: 'uint256', name: 'updatedAt' },
+      { type: 'uint80', name: 'answeredInRound' },
     ],
     inputs: [],
     stateMutability: 'view',
@@ -41,28 +61,42 @@ const CHAINLINK_ABI = [
   },
   {
     name: 'decimals',
-    outputs: [{ type: 'uint8' }],
+    outputs: [{ type: 'uint8', name: 'value' }],
     inputs: [],
     stateMutability: 'view',
     type: 'function',
   },
-];
+] as const;
 
 app.get('/price', async (req, res) => {
   const denom = req.query.denom === 'eth' ? 'eth' : 'usd';
 
   try {
-    const lens = new ethers.Contract(POOL_LENS_ADDRESS, POOL_LENS_ABI, w3Plume);
-    const rawPrice = await lens.getPoolPrice(PLUME_PUSD_POOL);
+    const rawPrice = await plumeClient.readContract({
+      address: POOL_LENS_ADDRESS,
+      abi: POOL_LENS_ABI,
+      functionName: 'getPoolPrice',
+      args: [PLUME_PUSD_POOL],
+    });
     const plumePusd = parseFloat(formatUnits(rawPrice, 18));
 
     let price = plumePusd;
 
     if (denom === 'eth') {
-      const chainlink = new ethers.Contract(CHAINLINK_ETH_USD, CHAINLINK_ABI, w3Mainnet);
-      const [ , answer ] = await chainlink.latestRoundData();
-      const decimals = Number(await chainlink.decimals());
-      const ethUsd = parseFloat(formatUnits(answer, decimals));
+      const roundData = await mainnetClient.readContract({
+        address: CHAINLINK_ETH_USD,
+        abi: CHAINLINK_ABI,
+        functionName: 'latestRoundData',
+      });
+      const answer = roundData[1];
+
+      const decimals = await mainnetClient.readContract({
+        address: CHAINLINK_ETH_USD,
+        abi: CHAINLINK_ABI,
+        functionName: 'decimals',
+      });
+
+      const ethUsd = parseFloat(formatUnits(answer, Number(decimals)));
       price = plumePusd / ethUsd;
     }
 
