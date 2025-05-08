@@ -1,6 +1,6 @@
 # Plume Price API (TypeScript)
 
-This is a simple Express.js API written in TypeScript that fetches the price of the PLUME token from the Plume network.
+A simple Express.js API written in TypeScript that fetches the price of the PLUME token from the Plume network.
 
 ## Prerequisites
 
@@ -28,6 +28,8 @@ This is a simple Express.js API written in TypeScript that fetches the price of 
 
 ## Running the API
 
+### For Production/Staging
+
 1. Compile TypeScript:
    ```bash
    npm run build
@@ -35,6 +37,15 @@ This is a simple Express.js API written in TypeScript that fetches the price of 
 2. Start the server:
    ```bash
    npm start
+   ```
+   The API will be running on `http://localhost:8000` (or the port specified in `.env`).
+
+### For Local Development
+
+You can run the application directly using `ts-node` (make sure you have it installed, e.g., via `npm install -D ts-node` or it's in your project's `devDependencies`). This is useful for quick testing as it compiles and runs the TypeScript code in memory.
+
+   ```bash
+   npx ts-node index.ts
    ```
    The API will be running on `http://localhost:8000` (or the port specified in `.env`).
 

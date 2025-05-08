@@ -2,7 +2,6 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
-import Decimal from 'decimal.js';
 
 dotenv.config();
 
@@ -61,6 +60,13 @@ const CHAINLINK_ABI = [
   },
 ] as const;
 
+function formatFixedPoint(value: bigint, decimals: number = 8): string {
+  const multiplier = 10n ** BigInt(decimals);
+  const integerPart = value / multiplier;
+  const fractionalPart = value % multiplier;
+  return `${integerPart}.${fractionalPart.toString().padStart(decimals, '0')}`;
+}
+
 app.get('/price', async (req, res) => {
   const denom = req.query.denom === 'eth' ? 'eth' : 'usd';
 
@@ -71,12 +77,13 @@ app.get('/price', async (req, res) => {
       functionName: 'slot0',
     });
 
-    const sqrtX96 = new Decimal(slot0[0].toString());
-    const Q96 = new Decimal(2).pow(96);
-    const Q192 = Q96.pow(2);
-    const price = sqrtX96.pow(2).div(Q192).mul(new Decimal(10).pow(18 - 6));
+    const sqrtX96 = BigInt(slot0[0]);
+    const priceX96 = sqrtX96 * sqrtX96;
 
-    let priceResult = price;
+    const scale = 10n ** 20n;
+    const priceScaled = (priceX96 * scale) / (2n ** 192n);
+
+    let priceResult = priceScaled;
 
     if (denom === 'eth') {
       const roundData = await mainnetClient.readContract({
@@ -84,7 +91,7 @@ app.get('/price', async (req, res) => {
         abi: CHAINLINK_ABI,
         functionName: 'latestRoundData',
       });
-      const answer = roundData[1];
+      const answer = BigInt(roundData[1]);
 
       const decimals = await mainnetClient.readContract({
         address: CHAINLINK_ETH_USD,
@@ -92,13 +99,13 @@ app.get('/price', async (req, res) => {
         functionName: 'decimals',
       });
 
-      const ethUsd = new Decimal(answer.toString()).div(new Decimal(10).pow(decimals));
-      priceResult = price.div(ethUsd);
+      const ethUsd = (answer * scale) / 10n ** BigInt(decimals);
+      priceResult = (priceScaled * scale) / ethUsd;
     }
 
     res.json({
       symbol: 'PLUME',
-      [`price_${denom}`]: priceResult.toFixed(8),
+      [`price_${denom}`]: formatFixedPoint(priceResult, 8),
     });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
