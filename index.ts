@@ -1,48 +1,41 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import { createPublicClient, http, formatUnits, defineChain } from 'viem';
+import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
+import Decimal from 'decimal.js';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 8000;
 
-export const plume = defineChain({
-  id: 98866,
-  name: 'Plume Mainnet',
-  nativeCurrency: { name: 'PLUME', symbol: 'PLUME', decimals: 18 },
-  rpcUrls: {
-    default: { http: ['https://rpc.plume.org'] },
-  },
-  blockExplorers: {
-    default: { name: 'Plume Explorer', url: 'https://explorer.plume.org' },
-  },
+const alchemyRpc = process.env.ALCHEMY_RPC;
+
+const mainnetClient = createPublicClient({
+  chain: mainnet,
+  transport: http(alchemyRpc || undefined),
 });
 
-const plumeClient = createPublicClient({
-  chain: plume,
-  transport: http(),
-});
+const UNISWAP_V3_PLUME_USDC_POOL = '0xe35Bfbf439D7C37E2Df41BF1236cCf1dEc0543fd';
 
-const POOL_LENS_ADDRESS = '0xBf0D89E67351f68a0a921943332c5bE0f7a0FF8A';
-const PLUME_PUSD_POOL = '0x4A14398C5c5B4B7913954cB82521fB7afA676314';
-
-const POOL_LENS_ABI = [
+const UNISWAP_V3_POOL_ABI = [
   {
-    inputs: [{ internalType: 'address', name: 'pool', type: 'address' }],
-    name: 'getPoolPrice',
-    outputs: [{ internalType: 'uint256', name: 'price', type: 'uint256' }],
+    name: 'slot0',
+    outputs: [
+      { internalType: 'uint160', name: 'sqrtPriceX96', type: 'uint160' },
+      { internalType: 'int24', name: 'tick', type: 'int24' },
+      { internalType: 'uint16', name: 'observationIndex', type: 'uint16' },
+      { internalType: 'uint16', name: 'observationCardinality', type: 'uint16' },
+      { internalType: 'uint16', name: 'observationCardinalityNext', type: 'uint16' },
+      { internalType: 'uint8', name: 'feeProtocol', type: 'uint8' },
+      { internalType: 'bool', name: 'unlocked', type: 'bool' },
+    ],
+    inputs: [],
     stateMutability: 'view',
     type: 'function',
   },
 ] as const;
 
-const alchemyRpc = process.env.ALCHEMY_RPC;
-const mainnetClient = createPublicClient({
-  chain: mainnet,
-  transport: http(alchemyRpc || undefined),
-});
 const CHAINLINK_ETH_USD = '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419';
 
 const CHAINLINK_ABI = [
@@ -72,15 +65,18 @@ app.get('/price', async (req, res) => {
   const denom = req.query.denom === 'eth' ? 'eth' : 'usd';
 
   try {
-    const rawPrice = await plumeClient.readContract({
-      address: POOL_LENS_ADDRESS,
-      abi: POOL_LENS_ABI,
-      functionName: 'getPoolPrice',
-      args: [PLUME_PUSD_POOL],
+    const slot0 = await mainnetClient.readContract({
+      address: UNISWAP_V3_PLUME_USDC_POOL,
+      abi: UNISWAP_V3_POOL_ABI,
+      functionName: 'slot0',
     });
-    const plumePusd = parseFloat(formatUnits(rawPrice, 18));
 
-    let price = plumePusd;
+    const sqrtX96 = new Decimal(slot0[0].toString());
+    const Q96 = new Decimal(2).pow(96);
+    const Q192 = Q96.pow(2);
+    const price = sqrtX96.pow(2).div(Q192).mul(new Decimal(10).pow(18 - 6));
+
+    let priceResult = price;
 
     if (denom === 'eth') {
       const roundData = await mainnetClient.readContract({
@@ -96,13 +92,13 @@ app.get('/price', async (req, res) => {
         functionName: 'decimals',
       });
 
-      const ethUsd = parseFloat(formatUnits(answer, Number(decimals)));
-      price = plumePusd / ethUsd;
+      const ethUsd = new Decimal(answer.toString()).div(new Decimal(10).pow(decimals));
+      priceResult = price.div(ethUsd);
     }
 
     res.json({
       symbol: 'PLUME',
-      [`price_${denom}`]: price.toString(),
+      [`price_${denom}`]: priceResult.toFixed(8),
     });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
